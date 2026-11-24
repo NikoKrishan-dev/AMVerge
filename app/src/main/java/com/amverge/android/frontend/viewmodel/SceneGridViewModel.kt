@@ -16,9 +16,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.io.File
 
 class SceneGridViewModel(
     private val projectId: String,
@@ -45,22 +45,23 @@ class SceneGridViewModel(
             }
         }
         viewModelScope.launch {
-            sceneRepository.observeScenes(projectId).collectLatest { scenes ->
-                _uiState.update { it.copy(scenes = scenes) }
+            sceneRepository.observeScenes(projectId)
+                .conflate()
+                .collectLatest { scenes ->
+                    _uiState.update { it.copy(scenes = scenes) }
 
-                // Auto-recover missing or failed thumbnails once
-                if (!hasTriggeredThumbRecovery && scenes.isNotEmpty()) {
-                    val missing = scenes.any { scene ->
-                        scene.thumbnailStatus != ThumbnailStatus.READY ||
-                        scene.thumbnailPath == null ||
-                        !File(scene.thumbnailPath).exists()
-                    }
-                    if (missing) {
-                        hasTriggeredThumbRecovery = true
-                        generateMissingThumbnails()
+                    // Auto-recover missing or failed thumbnails once (without blocking main-thread disk I/O)
+                    if (!hasTriggeredThumbRecovery && scenes.isNotEmpty()) {
+                        val missing = scenes.any { scene ->
+                            scene.thumbnailStatus != ThumbnailStatus.READY ||
+                            scene.thumbnailPath == null
+                        }
+                        if (missing) {
+                            hasTriggeredThumbRecovery = true
+                            generateMissingThumbnails()
+                        }
                     }
                 }
-            }
         }
         scenepackRepository?.let { repo ->
             viewModelScope.launch {

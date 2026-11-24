@@ -62,7 +62,6 @@ import com.amverge.android.frontend.theme.AppleSkyBlue
 import com.amverge.android.frontend.theme.AppleTile1
 import com.amverge.android.frontend.theme.AppleTile2
 import com.amverge.android.frontend.theme.AppleWhite
-import java.io.File
 
 @Composable
 fun SceneCard(
@@ -95,32 +94,18 @@ fun SceneCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // 1. Clean 16:9 Video Frame (Only non-overlapping corner pills)
+            // 1. Clean 16:9 Video Frame (Completely free for vertical scrolling & tap-to-select)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
                     .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
-                    .pointerInput(scene.id) {
-                        detectHorizontalDragGestures(
-                            onDragStart = { offset ->
-                                isScrubbing = true
-                                scrubProgress = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                            },
-                            onDragEnd = { isScrubbing = false },
-                            onDragCancel = { isScrubbing = false },
-                            onHorizontalDrag = { change, _ ->
-                                scrubProgress = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
-                            }
-                        )
-                    }
             ) {
                 val thumbPath = scene.thumbnailPath
-                val hasValidFile = thumbPath != null && File(thumbPath).exists()
 
-                if (hasValidFile) {
+                if (!thumbPath.isNullOrEmpty()) {
                     AsyncImage(
-                        model = File(thumbPath!!),
+                        model = thumbPath,
                         contentDescription = "Scene ${scene.index + 1}",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -280,6 +265,39 @@ fun SceneCard(
                         )
                     }
                 }
+            }
+
+            // Dedicated Scrub Bar (Isolated horizontal drag target so vertical scrolling is completely free and frictionless)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(16.dp)
+                    .background(AppleTile2)
+                    .padding(horizontal = 8.dp)
+                    .pointerInput(scene.id) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { offset ->
+                                isScrubbing = true
+                                scrubProgress = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                            },
+                            onDragEnd = { isScrubbing = false },
+                            onDragCancel = { isScrubbing = false },
+                            onHorizontalDrag = { change, _ ->
+                                scrubProgress = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                LinearProgressIndicator(
+                    progress = { if (isScrubbing) scrubProgress else 0f },
+                    color = if (isScrubbing) AppleSkyBlue else Color.Transparent,
+                    trackColor = AppleHairlineDark.copy(alpha = 0.6f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(9999.dp))
+                )
             }
 
             // 2. Dedicated Info & Action Area Below Thumbnail (ZERO collision, ZERO text cutting)

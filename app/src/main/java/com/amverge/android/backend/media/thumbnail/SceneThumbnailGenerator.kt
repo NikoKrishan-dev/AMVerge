@@ -4,12 +4,15 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Process
 import com.amverge.android.backend.domain.model.ThumbnailStatus
 import com.amverge.android.backend.domain.repository.SceneRepository
+import com.amverge.android.backend.domain.repository.ThumbnailBatchUpdate
 import com.amverge.android.backend.media.ffmpeg.MediaEngine
 import com.amverge.android.core.logging.Logger
 import com.amverge.android.core.result.OperationResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -22,6 +25,7 @@ class SceneThumbnailGenerator(
     companion object {
         private const val TAG = "ThumbnailGenerator"
         private const val TARGET_POSTER_WIDTH = 480
+        private const val BATCH_SIZE = 15
     }
 
     private fun getThumbnailDir(projectId: String): File {
@@ -35,6 +39,13 @@ class SceneThumbnailGenerator(
         sourceUri: String,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }
     ): OperationResult<Unit> = withContext(Dispatchers.IO) {
+        // Lower thread priority to background so generator yields CPU cycles to 120Hz/60Hz display frame rate
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+        } catch (e: Exception) {
+            Logger.w(TAG, "Could not set background thread priority", e)
+        }
+
         val scenes = sceneRepository.getScenes(projectId)
         if (scenes.isEmpty()) {
             return@withContext OperationResult.Success(Unit)
@@ -53,7 +64,7 @@ class SceneThumbnailGenerator(
             return@withContext OperationResult.Success(Unit)
         }
 
-        Logger.i(TAG, "Starting thumbnail generation for $total scenes in project $projectId")
+        Logger.i(TAG, "Starting thumbnail generation for $total scenes in project $projectId (batched, background priority)")
 
         var retriever: MediaMetadataRetriever? = null
         var retrieverAvailable = false
@@ -74,13 +85,18 @@ class SceneThumbnailGenerator(
             Logger.w(TAG, "MediaMetadataRetriever initialization failed, will use FFmpeg fallback", e)
         }
 
+        val batchBuffer = mutableListOf<ThumbnailBatchUpdate>()
+
         try {
             for ((index, scene) in pendingScenes.withIndex()) {
+                // Yield CPU cycles to ensure buttery smooth 120Hz/60Hz frame pacing
+                delay(12L)
+
                 val outputFile = File(targetDir, "thumb_${scene.index}.jpg")
                 val tempOutput = File(targetDir, "thumb_${scene.index}_tmp.jpg")
                 val seekMs = scene.startMs + minOf(50L, scene.durationMs / 2)
 
-                sceneRepository.updateThumbnailStatus(scene.id, ThumbnailStatus.RUNNING)
+                // Note: Redundant RUNNING status write removed to prevent Room flow re-emission flood
                 var success = false
 
                 // Primary path: Hardware-accelerated frame decode via MediaMetadataRetriever
@@ -143,19 +159,46 @@ class SceneThumbnailGenerator(
                 }
 
                 if (success) {
-                    sceneRepository.updateThumbnail(
-                        sceneId = scene.id,
-                        thumbnailPath = outputFile.absolutePath,
-                        status = ThumbnailStatus.READY
+                    batchBuffer.add(
+                        ThumbnailBatchUpdate(
+                            sceneId = scene.id,
+                            thumbnailPath = outputFile.absolutePath,
+                            status = ThumbnailStatus.READY
+                        )
                     )
                 } else {
                     Logger.e(TAG, "Failed both retriever and FFmpeg poster extraction for scene ${scene.index}")
-                    sceneRepository.updateThumbnailStatus(scene.id, ThumbnailStatus.FAILED)
+                    batchBuffer.add(
+                        ThumbnailBatchUpdate(
+                            sceneId = scene.id,
+                            thumbnailPath = null,
+                            status = ThumbnailStatus.FAILED
+                        )
+                    )
+                }
+
+                // Batch Room DB updates to avoid re-emitting Flow 600 times
+                if (batchBuffer.size >= BATCH_SIZE) {
+                    sceneRepository.updateThumbnailsBatch(batchBuffer)
+                    batchBuffer.clear()
                 }
 
                 onProgress(index + 1, total)
             }
+
+            // Flush any remaining batched updates
+            if (batchBuffer.isNotEmpty()) {
+                sceneRepository.updateThumbnailsBatch(batchBuffer)
+                batchBuffer.clear()
+            }
         } finally {
+            if (batchBuffer.isNotEmpty()) {
+                try {
+                    sceneRepository.updateThumbnailsBatch(batchBuffer)
+                } catch (e: Exception) {
+                    Logger.w(TAG, "Failed flushing remaining thumbnail updates", e)
+                }
+            }
             try {
                 retriever?.release()
             } catch (e: Exception) {

@@ -1,11 +1,13 @@
 package com.amverge.android.backend.data.repository
 
 import com.amverge.android.backend.data.database.dao.SceneDao
+import com.amverge.android.backend.data.database.dao.ThumbnailBatchItem
 import com.amverge.android.backend.data.mapper.toDomain
 import com.amverge.android.backend.data.mapper.toEntity
 import com.amverge.android.backend.domain.model.Scene
 import com.amverge.android.backend.domain.model.ThumbnailStatus
 import com.amverge.android.backend.domain.repository.SceneRepository
+import com.amverge.android.backend.domain.repository.ThumbnailBatchUpdate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -39,6 +41,19 @@ class SceneRepositoryImpl(
 
     override suspend fun updateThumbnailStatus(sceneId: String, status: ThumbnailStatus) {
         sceneDao.updateThumbnailStatus(sceneId, status.name)
+    }
+
+    override suspend fun updateThumbnailsBatch(updates: List<ThumbnailBatchUpdate>) {
+        if (updates.isEmpty()) return
+        sceneDao.updateThumbnailsBatch(
+            updates.map {
+                ThumbnailBatchItem(
+                    sceneId = it.sceneId,
+                    thumbnailPath = it.thumbnailPath,
+                    status = it.status.name
+                )
+            }
+        )
     }
 
     override suspend fun toggleFavorite(sceneId: String, isFavorite: Boolean) {

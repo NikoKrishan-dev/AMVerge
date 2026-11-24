@@ -8,6 +8,12 @@ import androidx.room.Transaction
 import com.amverge.android.backend.data.database.entity.SceneEntity
 import kotlinx.coroutines.flow.Flow
 
+data class ThumbnailBatchItem(
+    val sceneId: String,
+    val thumbnailPath: String?,
+    val status: String
+)
+
 @Dao
 interface SceneDao {
 
@@ -40,6 +46,17 @@ interface SceneDao {
 
     @Query("UPDATE scenes SET thumbnailStatus = :status WHERE id = :sceneId")
     suspend fun updateThumbnailStatus(sceneId: String, status: String)
+
+    @Transaction
+    suspend fun updateThumbnailsBatch(updates: List<ThumbnailBatchItem>) {
+        for (item in updates) {
+            if (item.thumbnailPath != null) {
+                updateThumbnail(item.sceneId, item.thumbnailPath, item.status)
+            } else {
+                updateThumbnailStatus(item.sceneId, item.status)
+            }
+        }
+    }
 
     @Query("UPDATE scenes SET isFavorite = :isFavorite WHERE id = :sceneId")
     suspend fun updateFavorite(sceneId: String, isFavorite: Boolean)
